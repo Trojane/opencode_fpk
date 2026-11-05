@@ -8,9 +8,11 @@
 
 ## 一、直接安装
 
-1. 下载 `dist/opencode_all_2.2.5.fpk`
-2. 飞牛 → 应用中心 → 手动安装 → 选择该文件
-3. 安装完成后在桌面点 OpenCode 图标
+1. 下载 `dist/` 下的 3 个分卷（Gitee 单文件上限 100 MB，成品 236 MB 已按 80 MB 切分）
+2. 合并：`cd dist && ./join.sh`（或 `cat opencode_all_2.2.5.fpk.part-* > opencode_all_2.2.5.fpk`）
+3. 校验 SHA-256：`73efb29af0dd3141b0002884cadf6a8c3188a15964faac9aa87b2d0c7426d6d7`
+4. 飞牛 → 应用中心 → 手动安装 → 选择合并后的 `opencode_all_2.2.5.fpk`
+5. 安装完成后在桌面点 OpenCode 图标
 
 安装向导会提示项目目录位置。默认项目目录：
 
