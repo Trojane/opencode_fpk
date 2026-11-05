@@ -41,8 +41,8 @@ var (
 	VAR_DIR   = envOr("TRIM_PKGVAR", "/var/apps/opencode/var")
 	SOCK_PATH = filepath.Join(APP_DEST, "app.sock")
 	PREFIX    = "/app/opencode"
-	UP_ADDR   = "127.0.0.1:14096"
-	OC_PORT   = 14096
+	OC_PORT   = envInt("OC_SERVE_PORT", 14096)
+	UP_ADDR   = "127.0.0.1:" + strconv.Itoa(OC_PORT)
 
 	PID_FILE     = vfile("gateway.pid")     // supervise 进程
 	SERVE_PID    = vfile("serve.pid")       // opencode serve 子进程
@@ -54,6 +54,16 @@ var (
 )
 
 var PB = []byte(PREFIX)
+
+// envInt 读取整数环境变量（用于把 opencode 端口做成可配置，便于并行实例/自测）
+func envInt(k string, d int) int {
+	if v := os.Getenv(k); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n < 65536 {
+			return n
+		}
+	}
+	return d
+}
 
 func envOr(k, d string) string {
 	if v := os.Getenv(k); v != "" {
@@ -300,18 +310,20 @@ func supervise() {
 	}()
 
 	// 前缀剥离 + shim 注入的反向代理（上游 opencode serve）
-	proxy := newProxy()
+	proxy := newProxy(true)
+	portalProxy = proxy
+	directProxy = newProxy(false)
 	// 测试辅助：OC_TEST_PORTAL=<端口> 时，另起一个"模拟飞牛门户"监听（非前缀路径 404），
 	// 用于在真实浏览器里复现门户环境（服务端 404，比浏览器拦截更接近真实）。
 	if p := os.Getenv("OC_TEST_PORTAL"); p != "" {
 		go func() {
-			h := http.NewServeMux()
-			h.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-				if strings.HasPrefix(r.URL.Path, PREFIX) {
-					proxyRoute(proxy, w, r)
+			inner := mux(proxy)
+			h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/" {
+					http.NotFound(w, r)
 					return
 				}
-				http.NotFound(w, r)
+				inner.ServeHTTP(w, r)
 			})
 			logf("test-portal: listen :%s（根路径 404）", p)
 			_ = http.ListenAndServe(":"+p, h)
@@ -352,8 +364,8 @@ func supervise() {
 	}()
 
 	// 直连端口默认关闭：仅当 oc_home/port_tcp 存在时才启用（令牌鉴权），日常只用门户入口
-	if _, err := os.Stat(filepath.Join(OC_HOME, "port_tcp")); err == nil {
-		go startTCP(proxy)
+	if tcpEnabled() {
+		ensureTCPStarted()
 	}
 
 	serveOnce := func() error {
@@ -431,7 +443,14 @@ func indexByte(b []byte, c byte) int {
 	return -1
 }
 
-func newProxy() *httputil.ReverseProxy {
+// 门户入口（注入凭据）与直连入口（由客户端自带凭据）共用同一套改写逻辑
+var (
+	portalProxy *httputil.ReverseProxy
+	directProxy *httputil.ReverseProxy
+	tcpOnce     sync.Once
+)
+
+func newProxy(injectAuth bool) *httputil.ReverseProxy {
 	target := &url.URL{Scheme: "http", Host: UP_ADDR}
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1 // SSE/打字机流式输出即时刷新；WebSocket 升级由 ReverseProxy 内建支持
@@ -441,8 +460,10 @@ func newProxy() *httputil.ReverseProxy {
 	rp.Director = func(req *http.Request) {
 		origDir(req)
 		req.Header.Set("Accept-Encoding", "identity")
-		if pw, ok := servePass.Load().(string); ok && pw != "" {
-			req.SetBasicAuth("opencode", pw)
+		if injectAuth {
+			if pw, ok := servePass.Load().(string); ok && pw != "" {
+				req.SetBasicAuth("opencode", pw)
+			}
 		}
 	}
 	// 上游（opencode serve）尚未就绪时等待重试，避免应用刚启动时首次访问出现 502
@@ -558,6 +579,7 @@ func mux(rp *httputil.ReverseProxy) http.Handler {
 		w.Header().Set("Cache-Control", "no-store")
 		_, _ = io.WriteString(w, ShimScript())
 	}
+	registerPairRoutes(m)
 	m.HandleFunc("/__gw_shim.js", shimHandler)
 	m.HandleFunc(PREFIX+"/__gw_shim.js", shimHandler)
 	m.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) { proxyRoute(rp, w, r) })
@@ -846,7 +868,12 @@ func tcpPort() string {
 	return "4096"
 }
 
-func startTCP(rp *httputil.ReverseProxy) {
+// ensureTCPStarted 启动局域网直连端口（幂等，可在运行中调用）
+func ensureTCPStarted() {
+	tcpOnce.Do(func() { go startTCP() })
+}
+
+func startTCP() {
 	tok := ensureToken()
 	addr := ":" + tcpPort()
 	for {
@@ -876,11 +903,23 @@ func startTCP(rp *httputil.ReverseProxy) {
 				http.Redirect(w, r, target, http.StatusFound)
 				return
 			}
+			// 三种进入方式：
+			//  1) 令牌 cookie（浏览器扫码/输入过令牌）
+			//  2) 配对码交换路径 /auth/connect/<code>（由上游校验 code）
+			//  3) 自带 Basic 凭据的客户端（桌面端/手机 App 用地址+密码）
+			rp := portalProxy
 			ok := false
 			if c, err := r.Cookie("oc_token"); err == nil && c.Value == tok {
 				ok = true
 			}
-			if !ok {
+			if !ok && strings.HasPrefix(r.URL.Path, "/auth/connect/") {
+				ok = true
+			}
+			if !ok && r.Header.Get("Authorization") != "" && directProxy != nil {
+				ok = true
+				rp = directProxy
+			}
+			if !ok || rp == nil {
 				loginPage(w)
 				return
 			}
