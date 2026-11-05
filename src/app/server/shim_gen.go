@@ -223,7 +223,7 @@ const RUNTIME_SHIM = `(function(){
 })();`
 
 // ShimScript 返回外链补丁脚本内容（外链才能通过页面 CSP 的 script-src 'self'）
-func ShimScript() string { return RUNTIME_SHIM }
+func ShimScript() string { return RUNTIME_SHIM + PAIR_UI }
 
 // injectShim 在 HTML 中注入外链补丁，并把首屏绝对路径改写为带前缀形式。
 // <script type="module" src="/assets/..."> 这类资源在补丁执行前就被浏览器拉取，
