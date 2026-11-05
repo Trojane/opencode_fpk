@@ -1,0 +1,40 @@
+--- a/app/server/gateway.go
++++ b/app/server/gateway.go
+@@ -34,7 +34,7 @@
+ 	"sync/atomic"
+ )
+ 
+-const VERSION = "1.19.3"
++const VERSION = "2.2.5"
+ 
+ var (
+ 	APP_DEST  = envOr("TRIM_APPDEST", "/var/apps/opencode/target")
+@@ -533,7 +533,7 @@
+ 
+ func mux(rp *httputil.ReverseProxy) http.Handler {
+ 	m := http.NewServeMux()
+-	m.HandleFunc("/gateway/status", func(w http.ResponseWriter, r *http.Request) {
++	statusHandler := func(w http.ResponseWriter, r *http.Request) {
+ 		wd := workDir()
+ 		w.Header().Set("Content-Type", "application/json")
+ 		w.Header().Set("Cache-Control", "no-store")
+@@ -542,12 +542,16 @@
+ 		wdReal, _ := filepath.EvalSymlinks(wd)
+ 		visible := strings.HasPrefix(wdReal, varReal)
+ 		_, _ = fmt.Fprintf(w, `{"workdir":%q,"visible":%t}`, wd, visible)
+-	})
++	}
++	m.HandleFunc("/gateway/status", statusHandler)
++	m.HandleFunc(PREFIX+"/gateway/status", statusHandler)
+ 
+-	m.HandleFunc("/gateway/healthz", func(w http.ResponseWriter, r *http.Request) {
++	healthHandler := func(w http.ResponseWriter, r *http.Request) {
+ 		w.WriteHeader(200)
+ 		_, _ = w.Write([]byte("ok"))
+-	})
++	}
++	m.HandleFunc("/gateway/healthz", healthHandler)
++	m.HandleFunc(PREFIX+"/gateway/healthz", healthHandler)
+ 	// 补丁脚本：门户路径带前缀，必须同时注册带前缀与不带前缀的两种路径
+ 	shimHandler := func(w http.ResponseWriter, r *http.Request) {
+ 		w.Header().Set("Content-Type", "application/javascript; charset=utf-8")

@@ -1,0 +1,4 @@
+work/
+*.tar.gz
+*.tgz
+.DS_Store

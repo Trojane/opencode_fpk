@@ -1,0 +1,86 @@
+--- a/app/server/shim_gen.go
++++ b/app/server/shim_gen.go
+@@ -83,49 +83,49 @@
+     }
+ 
+     // 自动打开项目：应用必须先打开项目，右上角「+ 新建会话」才可用。
+-    // 进入"还没有内容"状态时，自动点「添加项目」→ 按目录名点中弹层里的第一个文件夹。
+-    var _autoTried=0, _autoName=null;
+-    function _autoClickName(){
+-      if(sessionStorage.getItem("oc_auto_proj")==="1")return true;
+-      var name=_autoName||"我的项目";
+-      var els=Array.prototype.slice.call(document.querySelectorAll("body *")).filter(function(e){
+-        return (e.innerText||"").trim()===name && e.getBoundingClientRect().height<44;
+-      });
+-      if(!els.length)return false;
+-      try{ els[els.length-1].click(); }catch(e){}
+-      setTimeout(function(){
+-        var t=document.body.innerText||"";
+-        if(t.indexOf("创建")>=0 && t.indexOf("打开项目")<0) sessionStorage.setItem("oc_auto_proj","1");
+-      },400);
+-      return true;
++    // 2.2.x 流程：首页空态点「Add project / 添加项目」→ 目录弹层点「Select folder / 选择文件夹」。
++    var _addClicked=0;
++    function _gwClickText(names){
++      var els=Array.prototype.slice.call(document.querySelectorAll("button,[role=button],a,div[role=option]"));
++      for(var i=0;i<els.length;i++){
++        var t=(els[i].innerText||"").trim();
++        if(!t||t.length>40)continue;
++        for(var j=0;j<names.length;j++){
++          if(t===names[j]){try{els[i].click();return true;}catch(e){}}
++        }
++      }
++      return false;
+     }
+     function _autoOpenProject(){
+       try{
+         if(sessionStorage.getItem("oc_auto_proj")==="1")return;
+         var txt=document.body?document.body.innerText:"";
+         if(!txt)return;
+-        if(txt.indexOf("通用")>=0&&txt.indexOf("提供商")>=0)return;   // 设置弹层开着，别乱点
+-        var hasDlg=txt.indexOf("打开项目")>=0;
+-        if(!hasDlg){
+-          if(txt.indexOf("创建一个会话以开始")<0&&txt.indexOf("还没有内容")<0)return;
+-          var btn=document.querySelector('[data-action="home-add-project"]');
+-          if(!btn||_autoTried)return;
+-          _autoTried=1; btn.click();
+-          fetch(fix("/find/file?query=&dirs=true&limit=50")).then(function(r){return r.json();}).then(function(arr){
+-            if(Array.isArray(arr)&&arr.length){
+-              var it=arr[0];
+-              _autoName=(typeof it==="string")?it.split("/").filter(Boolean).pop():(it.name||(it.path||"").split("/").filter(Boolean).pop()||null);
+-            }
+-          }).catch(function(){});
++        // 设置弹层开着时不动作
++        if(txt.indexOf("Preferences")>=0&&txt.indexOf("Providers")>=0)return;
++        if(txt.indexOf("偏好设置")>=0&&txt.indexOf("提供商")>=0)return;
++        var dlg=txt.indexOf("Open project")>=0||txt.indexOf("打开项目")>=0;
++        if(dlg){
++          // 只在应用自己的项目目录（.../opencode/var/projects）时自动确认，用户手工导航到别处则不打扰
++          if(txt.indexOf("/projects")<0&&txt.indexOf("opencode/var")<0)return;
++          if(_gwClickText(["Select folder","Select Folder","选择文件夹","选择目录"])){
++            sessionStorage.setItem("oc_auto_proj","1");
++          }
++          return;
+         }
+-        var n=0, iv=setInterval(function(){
+-          n++;
+-          _autoClickName();
+-          if(n>=12||sessionStorage.getItem("oc_auto_proj")==="1")clearInterval(iv);
+-        },800);
++        var empty=txt.indexOf("Create a session to get started")>=0||txt.indexOf("Nothing here yet")>=0||
++                  txt.indexOf("创建一个会话以开始")>=0||txt.indexOf("还没有内容")>=0;
++        if(!empty||_addClicked)return;
++        var btn=document.querySelector('[data-action="home-add-project"]');
++        if(btn){_addClicked=1;btn.click();return;}
++        if(_gwClickText(["Add project","Add Project","添加项目"])){_addClicked=1;}
+       }catch(e){}
+     }
+-    setTimeout(_autoOpenProject,2600);
++    var _autoN=0,_autoIv=setInterval(function(){
++      _autoN++;
++      _autoOpenProject();
++      if(_autoN>=20||sessionStorage.getItem("oc_auto_proj")==="1")clearInterval(_autoIv);
++    },1000);
+ 
+     // 项目目录提示：常驻显示实际完整路径（审核/用户都能直接看到文件在哪）。
+     // 可见=绿色条；不可见=橙色条并给出修复指引。点击右侧 × 关闭。
